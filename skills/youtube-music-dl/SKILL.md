@@ -56,7 +56,11 @@ Error object: `{"version":"1","ok":false,"error":{"code":"…","message":"…"}}
 
 See all command line options by running `youtube-music-dl -h`.
 
-## Fix tags without re-downloading: `retag`
+## Cleaning up tags
+
+Many tracks on YouTube have things like `(Album Version)` or `(Audio)` in the title. If you detect something like this that is obviously not part of the song's title, please remove it.
+
+### Fix tags without re-downloading: `retag`
 
 If the user got the artist or album wrong, don't re-download — use the `retag` subcommand. It rewrites the artist/album tags on the album's files and moves the `<artist>/<album>` folder to match. Titles, track numbers, and provenance are left intact.
 
