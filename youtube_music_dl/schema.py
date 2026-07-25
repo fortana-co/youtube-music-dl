@@ -27,18 +27,27 @@ ErrorCode = Literal[
 ]
 ERROR_CODES: tuple[ErrorCode, ...] = get_args(ErrorCode)
 
+# What would fix a failed track, bucketed for a consumer to branch on (see downloader.classify_error). The JSON enum in
+# TRACK_ERROR_SCHEMA is derived from this, so the type and the schema can't drift.
+ErrorKind = Literal[
+    "gone",  # video is private/removed/region-locked -> drop the track, re-running never helps
+    "blocked",  # YouTube is refusing this client (bot check / rate limit) -> re-run from a different network, or wait
+    "transient",  # anything else -> re-run the same command
+]
+ERROR_KINDS: tuple[ErrorKind, ...] = get_args(ErrorKind)
+
 TRACK_ERROR_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["message", "permanent"],
+    "required": ["message", "kind"],
     "properties": {
         "message": {
             "type": ["string", "null"],
             "description": "yt-dlp's explanation of the failure, or null when it gave none",
         },
-        "permanent": {
-            "type": "boolean",
-            "description": "true when re-running can never fix this (private, deleted, or region-blocked video); false when the failure may be transient (throttling), so re-running the same command is worth trying -- already-downloaded tracks are skipped",  # noqa: E501
+        "kind": {
+            "enum": list(ERROR_KINDS),
+            "description": "what would fix the failure. 'gone': the video is private, removed, or region-locked -- re-running never helps, so drop the track. 'blocked': YouTube is refusing this client (a bot check or rate limit) -- re-run from a different network or with any VPN off, or wait. 'transient': anything else -- re-run the same command; already-downloaded tracks are skipped.",  # noqa: E501
         },
     },
 }

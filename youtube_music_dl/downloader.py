@@ -32,7 +32,7 @@ from typing import Any, Generic, NamedTuple, TypeVar
 import jsonschema
 import yt_dlp
 
-from .schema import SCHEMA_VERSION, ErrorCode, validate_chapters_file
+from .schema import SCHEMA_VERSION, ErrorCode, ErrorKind, validate_chapters_file
 from .tagging import SUPPORTED_EXTENSIONS, existing_files_by_id, read_provenance, tag_audio, update_tags
 
 # yt-dlp's `extract_info`/`YoutubeDL` are effectively dynamic; treat as untyped.
@@ -46,13 +46,14 @@ T = TypeVar("T")
 # costs their sum in extra wall time. Kept short because downloads are serial, which already spaces requests out.
 RETRY_DELAYS_S = (2.0, 5.0)
 
-# Substrings (matched case-insensitively) of yt-dlp errors that no retry can fix, so we fail fast instead of backing
-# off. Deliberately conservative: an unrecognized error is treated as transient and retried, so the worst case for a
-# missing entry here is the wait we'd have done anyway. Never add throttling messages ("429", "confirm you're not a
-# bot"); those are exactly what the retries exist for. Error text comes from YouTube, which means it can change w/o
-# warning, but it probably won't -- these error messages have been stable for a long time. TODO: We could upload videos
-# and add tests for these error cases.
-PERMANENT_ERROR_FRAGMENTS = (
+# A failed extraction is bucketed by what would actually fix it (see classify_error): "gone", "blocked", or the
+# "transient" default. The two fragment lists below drive that; anything they don't match stays "transient" and is
+# retried, so the worst case for a missing entry is the short backoff we'd have done anyway. Error text comes from
+# YouTube and can change without warning, but these strings have been stable for a long time.
+# TODO: We could upload videos and add tests for these error cases against real yt-dlp output.
+
+# "gone": the video can't be fetched by anyone, or by us here (private, removed, region-locked). Give up on it.
+GONE_ERROR_FRAGMENTS = (
     "private video",
     "video unavailable",
     "removed by the uploader",
@@ -60,6 +61,14 @@ PERMANENT_ERROR_FRAGMENTS = (
     "account associated with this video has been terminated",
     "members-only content",
     "not available in your country",
+)
+# "blocked": YouTube is refusing this client, not this video -- a bot challenge or rate limit. An in-process retry can't
+# clear a flagged IP in a few seconds, so we fail fast like "gone"; but unlike "gone" the remedy is a cleaner network
+# (turn off a VPN, switch connection, wait), after which the very same run works. NOT stale yt-dlp, so no upgrade nag.
+BLOCKED_ERROR_FRAGMENTS = (
+    "confirm you're not a bot",
+    "too many requests",
+    "http error 429",
 )
 
 AUDIO_FORMATS = ("opus", "m4a", "mp3")
@@ -157,10 +166,10 @@ def normalize_audio_quality(audio_quality: str) -> str:
 
 
 class TrackError(NamedTuple):
-    """Why a track failed: yt-dlp's own words, and whether re-running could ever fix it."""
+    """Why a track failed: yt-dlp's own words, and what would fix it (see classify_error for the `kind` values)."""
 
     message: str | None
-    permanent: bool
+    kind: ErrorKind
 
 
 class Track(NamedTuple):
@@ -282,15 +291,23 @@ def download_opts(target_dir: Path, audio_format: str, audio_quality: str) -> di
     return opts
 
 
-def is_permanent_failure(error: str) -> bool:
-    """Whether yt-dlp's error says the video can never be fetched (vs. throttling, which a retry can clear)."""
+def classify_error(error: str) -> ErrorKind:
+    """
+    Bucket a yt-dlp error by what would fix it: "gone" (unfetchable video -- give up), "blocked" (YouTube is refusing
+    this client, e.g. a bot check or 429 -- change network, then re-run), or "transient" (anything else -- just re-run).
+    The default is "transient", so an unrecognized or empty error is retried rather than misreported.
+    """
     normalized = error.lower()
-    return any(fragment in normalized for fragment in PERMANENT_ERROR_FRAGMENTS)
+    if any(fragment in normalized for fragment in GONE_ERROR_FRAGMENTS):
+        return "gone"
+    if any(fragment in normalized for fragment in BLOCKED_ERROR_FRAGMENTS):
+        return "blocked"
+    return "transient"
 
 
 def track_error(error: str) -> TrackError:
     """Classify a yt-dlp error for a failed track. An empty error means yt-dlp said nothing, not that all is well."""
-    return TrackError(error or None, is_permanent_failure(error))
+    return TrackError(error or None, classify_error(error))
 
 
 def track_json(track: Track) -> dict[str, Any]:
@@ -305,28 +322,38 @@ def track_json(track: Track) -> dict[str, Any]:
 
 def with_retries(fn: Callable[[], Outcome[T]], description: str) -> Outcome[T]:
     """
-    Call `fn` until it succeeds, pausing RETRY_DELAYS_S between tries. Returns early on a failure yt-dlp has told
-    us is permanent, so a private or deleted video is reported immediately instead of after the full backoff.
+    Call `fn` until it succeeds, pausing RETRY_DELAYS_S between tries. Only a "transient" failure is retried; a "gone"
+    or "blocked" one returns immediately, since no amount of backing off in-process will clear a dead video or a
+    flagged IP -- retrying those would just burn the backoff once per track across a whole album.
     """
     for delay_s in RETRY_DELAYS_S:
         outcome = fn()
         if outcome.value is not None:
             return outcome
-        if is_permanent_failure(outcome.error):
+        if classify_error(outcome.error) != "transient":
             return outcome
         log(f"{description} failed, retrying in {delay_s:g}s")
         time.sleep(delay_s)
     return fn()
 
 
+def blocked_hint() -> str:
+    """Guidance for a "blocked" failure: it's the network/IP, not the tool. Upgrade is mentioned last, a long shot."""
+    return f"YouTube is refusing this connection (a bot check or rate limit -- common over a VPN or datacenter IP, or after too many requests). Try again on a different network or with any VPN turned off; if it persists, updating yt-dlp may help: {ytdlp_upgrade_command()}"  # noqa: E501
+
+
 def extraction_failed_message(prefix: str, error: str) -> str:
     """
-    Explain a failed extraction. A permanent failure gets yt-dlp's own reason and nothing else; anything else keeps the
-    upgrade hint, since an unexplained failure really can mean yt-dlp has fallen behind YouTube. This lets us avoid
-    sending someone to run `upgrade` because a video was private.
+    Explain a failed extraction, matched to its cause. "gone" gets yt-dlp's own reason and nothing else; "blocked" gets
+    the network hint; anything else keeps the upgrade hint, since an unexplained failure really can mean yt-dlp has
+    fallen behind YouTube. This is what avoids sending someone to run `upgrade` because a video was private or their IP
+    was flagged.
     """
-    if is_permanent_failure(error):
+    kind = classify_error(error)
+    if kind == "gone":
         return f"{prefix}: {error}"
+    if kind == "blocked":
+        return f"{prefix}: {error}. {blocked_hint()}"
     detail = f" ({error})" if error else ""
     return f"{prefix}{detail}. {outdated_ytdlp_hint()}"
 
@@ -510,11 +537,16 @@ def downloader(
 
     failed = [t for t in tracks if t.status == "failed"]
     if failed:
-        # Only nag about yt-dlp when something failed for a reason an upgrade could plausibly fix.
-        if all(t.error and t.error.permanent for t in failed):
-            log(f"note: {len(failed)} track(s) failed permanently (see each track's error); re-running won't help")
+        # Steer the note by the failures present, worst-actionable first, so we only nag about yt-dlp when an upgrade
+        # could plausibly be the fix.
+        kinds = {t.error.kind for t in failed if t.error}
+        n = len(failed)
+        if "blocked" in kinds:
+            log(f"note: {n} track(s) failed because {blocked_hint()}")
+        elif kinds == {"gone"}:
+            log(f"note: {n} track(s) unavailable (private/removed/region-locked, see each error); re-running won't fix")
         else:
-            log(f"note: {len(failed)} track(s) failed; re-running skips what succeeded. {outdated_ytdlp_hint()}")
+            log(f"note: {n} track(s) failed; re-running skips what succeeded. {outdated_ytdlp_hint()}")
 
     return {
         "version": SCHEMA_VERSION,
@@ -649,9 +681,11 @@ def do_chapters(url: str, top: Info, chapters_file: str, ctx: Ctx) -> tuple[list
                 results.append(Track(index, "downloaded", title, source_id, canonical, str(dest)))
             except Exception as e:  # report per-chapter failure, keep going
                 log(f"failed to split/tag chapter {index} ({title}): {e}")
-                # A local ffmpeg/tagging failure, so the yt-dlp classification doesn't apply: not permanent, because
-                # what usually fixes it is editing the chapter boundaries and re-running.
-                results.append(Track(index, "failed", title, source_id, canonical, None, TrackError(str(e), False)))
+                # A local ffmpeg/tagging failure, not a yt-dlp one: "transient", because what usually fixes it is
+                # editing the chapter boundaries and re-running.
+                results.append(
+                    Track(index, "failed", title, source_id, canonical, None, TrackError(str(e), "transient"))
+                )
     return results, str(normalized_path)
 
 

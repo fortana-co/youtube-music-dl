@@ -272,7 +272,7 @@ def test_result_schema_accepts_sample():
                 "youtube_video_id": None,
                 "url": "https://y/watch?v=def",
                 "file": None,
-                "error": {"message": "ERROR: [youtube] def: Private video.", "permanent": True},
+                "error": {"message": "ERROR: [youtube] def: Private video.", "kind": "gone"},
             },
         ],
     }
@@ -330,19 +330,23 @@ def test_probe_schema_accepts_sample():
 
 
 PRIVATE_VIDEO_ERROR = "ERROR: [youtube] abc123: Private video. Sign in if you've been granted access to this video."
-THROTTLED_ERROR = "ERROR: [youtube] abc123: Sign in to confirm you're not a bot. Use --cookies-from-browser."
+BOT_CHECK_ERROR = "ERROR: [youtube] abc123: Sign in to confirm you're not a bot. Use --cookies-from-browser."
+RATE_LIMIT_ERROR = "ERROR: unable to download webpage: HTTP Error 429: Too Many Requests"
+UNKNOWN_ERROR = "ERROR: [youtube] abc123: something yt-dlp has never said before"
 
 
-def test_is_permanent_failure_separates_dead_videos_from_throttling():
+def test_classify_error_buckets_by_remedy():
     import youtube_music_dl.downloader as dl
 
-    assert dl.is_permanent_failure(PRIVATE_VIDEO_ERROR)
-    assert dl.is_permanent_failure("ERROR: [youtube] abc: Video unavailable")  # matched case-insensitively
-    # Throttling is what the retries exist for, so it must never be classified permanent
-    assert not dl.is_permanent_failure(THROTTLED_ERROR)
-    assert not dl.is_permanent_failure("ERROR: unable to download webpage: HTTP Error 429: Too Many Requests")
-    assert not dl.is_permanent_failure("")  # no reason at all -> retry, the safe default
-    assert not dl.is_permanent_failure("ERROR: something yt-dlp has never said before")  # unknown -> retry
+    # gone: the video itself is unfetchable
+    assert dl.classify_error(PRIVATE_VIDEO_ERROR) == "gone"
+    assert dl.classify_error("ERROR: [youtube] abc: Video unavailable") == "gone"  # matched case-insensitively
+    # blocked: YouTube is refusing the client, not the video -- a bot check or a rate limit
+    assert dl.classify_error(BOT_CHECK_ERROR) == "blocked"
+    assert dl.classify_error(RATE_LIMIT_ERROR) == "blocked"
+    # transient: everything else, including nothing at all -> the safe, retryable default
+    assert dl.classify_error(UNKNOWN_ERROR) == "transient"
+    assert dl.classify_error("") == "transient"
 
 
 def test_with_retries_returns_first_success_without_sleeping(monkeypatch):
@@ -364,7 +368,7 @@ def test_with_retries_recovers_from_a_transient_failure(monkeypatch, capfd):
 
     slept_s: list[float] = []
     monkeypatch.setattr(dl.time, "sleep", slept_s.append)
-    outcomes = [dl.Outcome(None, THROTTLED_ERROR), dl.Outcome("ok")]  # throttled once, then succeeds
+    outcomes = [dl.Outcome(None, UNKNOWN_ERROR), dl.Outcome("ok")]  # fails once for an unknown reason, then succeeds
 
     assert dl.with_retries(lambda: outcomes.pop(0), "downloading X").value == "ok"
     assert slept_s == [dl.RETRY_DELAYS_S[0]]  # backed off once, and only once
@@ -380,25 +384,28 @@ def test_with_retries_gives_up_after_the_configured_delays(monkeypatch):
 
     def attempt() -> dl.Outcome[str]:
         calls.append(1)
-        return dl.Outcome(None, THROTTLED_ERROR)  # throttling that never clears
+        return dl.Outcome(None, UNKNOWN_ERROR)  # a transient failure that never clears
 
     assert dl.with_retries(attempt, "downloading X").value is None
     assert len(calls) == len(dl.RETRY_DELAYS_S) + 1  # one initial try plus one per delay
     assert slept_s == list(dl.RETRY_DELAYS_S)
 
 
-def test_with_retries_does_not_back_off_on_a_permanent_failure(monkeypatch):
+@pytest.mark.parametrize("error", [PRIVATE_VIDEO_ERROR, BOT_CHECK_ERROR, RATE_LIMIT_ERROR])
+def test_with_retries_does_not_back_off_when_a_retry_cannot_help(monkeypatch, error):
     import youtube_music_dl.downloader as dl
 
-    monkeypatch.setattr(dl.time, "sleep", lambda s: pytest.fail(f"slept {s}s on a private video"))
+    # A dead video ("gone") and a flagged IP ("blocked") both fail fast: backing off in-process would just burn the
+    # delay once per track across a whole album, for a failure the wait can't clear.
+    monkeypatch.setattr(dl.time, "sleep", lambda s: pytest.fail(f"slept {s}s on a non-transient failure"))
     calls: list[int] = []
 
     def attempt() -> dl.Outcome[str]:
         calls.append(1)
-        return dl.Outcome(None, PRIVATE_VIDEO_ERROR)
+        return dl.Outcome(None, error)
 
     outcome = dl.with_retries(attempt, "downloading X")
-    assert outcome.value is None and outcome.error == PRIVATE_VIDEO_ERROR  # the reason survives for the caller
+    assert outcome.value is None and outcome.error == error  # the reason survives for the caller
     assert len(calls) == 1  # gave up immediately rather than waiting out the backoff
 
 
@@ -410,20 +417,20 @@ def test_track_json_nests_the_error_as_an_object():
 
     failed = dl.track_json(dl.Track(2, "failed", "", None, "https://y/def", None, dl.track_error(PRIVATE_VIDEO_ERROR)))
     # A NamedTuple is a tuple, so an un-converted error would serialize as an array; it has to be a JSON object
-    assert failed["error"] == {"message": PRIVATE_VIDEO_ERROR, "permanent": True}
-    assert json.loads(json.dumps(failed))["error"]["permanent"] is True
+    assert failed["error"] == {"message": PRIVATE_VIDEO_ERROR, "kind": "gone"}
+    assert json.loads(json.dumps(failed))["error"]["kind"] == "gone"
 
 
 def test_track_error_reports_an_unexplained_failure_as_retryable():
     import youtube_music_dl.downloader as dl
 
-    assert dl.track_error("") == dl.TrackError(None, False)  # yt-dlp said nothing -> null message, worth retrying
-    assert dl.track_error(THROTTLED_ERROR) == dl.TrackError(THROTTLED_ERROR, False)
+    assert dl.track_error("") == dl.TrackError(None, "transient")  # yt-dlp said nothing -> retryable, message null
+    assert dl.track_error(BOT_CHECK_ERROR) == dl.TrackError(BOT_CHECK_ERROR, "blocked")
 
 
 def test_track_schema_ties_the_error_to_the_status():
     base = {"index": 1, "title": "Song", "youtube_video_id": "abc", "url": "https://y/abc", "file": "/abs/01.opus"}
-    err = {"message": "ERROR: [youtube] abc: Private video.", "permanent": True}
+    err = {"message": "ERROR: [youtube] abc: Private video.", "kind": "gone"}
 
     jsonschema.validate({**base, "status": "failed", "file": None, "error": err}, schema.TRACK_SCHEMA)
     jsonschema.validate({**base, "status": "downloaded", "error": None}, schema.TRACK_SCHEMA)
@@ -433,17 +440,25 @@ def test_track_schema_ties_the_error_to_the_status():
         jsonschema.validate({**base, "status": "failed", "file": None, "error": None}, schema.TRACK_SCHEMA)
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate({**base, "status": "downloaded", "error": err}, schema.TRACK_SCHEMA)
+    with pytest.raises(jsonschema.ValidationError):  # kind must be one of the three known buckets
+        jsonschema.validate(
+            {**base, "status": "failed", "file": None, "error": {**err, "kind": "huh"}}, schema.TRACK_SCHEMA
+        )
 
 
-def test_extraction_failed_message_only_blames_ytdlp_when_it_might_be_at_fault():
+def test_extraction_failed_message_matches_the_hint_to_the_cause():
     import youtube_music_dl.downloader as dl
 
-    permanent = dl.extraction_failed_message("couldn't extract info for U", PRIVATE_VIDEO_ERROR)
-    assert "Private video" in permanent
-    assert "upgrade" not in permanent  # the misdiagnosis this exists to prevent
+    gone = dl.extraction_failed_message("couldn't extract info for U", PRIVATE_VIDEO_ERROR)
+    assert "Private video" in gone
+    assert "upgrade" not in gone and "yt-dlp" not in gone  # a dead video is not a yt-dlp problem
 
-    transient = dl.extraction_failed_message("couldn't extract info for U", THROTTLED_ERROR)
-    assert "not a bot" in transient and "upgrade" in transient  # reason kept, hint still offered
+    blocked = dl.extraction_failed_message("couldn't extract info for U", BOT_CHECK_ERROR)
+    assert "not a bot" in blocked  # yt-dlp's own words are kept
+    assert "VPN" in blocked  # network-first guidance, not "your metadata is stale"
+
+    transient = dl.extraction_failed_message("couldn't extract info for U", UNKNOWN_ERROR)
+    assert "upgrade" in transient  # an unexplained failure really might be a stale yt-dlp, so the hint stays
 
 
 # --- self-describing CLI flags (subprocess, no network) -------------------

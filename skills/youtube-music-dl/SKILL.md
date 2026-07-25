@@ -16,14 +16,17 @@ Run `youtube-music-dl --version`. If a command later fails, verify the tooling:
 
 If a required binary is missing the CLI exits `1` with an error object whose `error.code` is `NO_FFMPEG` or `NO_JS_RUNTIME` — surface that to the user with the install hint.
 
-**Stale yt-dlp is the usual cause of sudden extraction failures.** YouTube changes often, so if a run fails with `NO_INFO`/`DOWNLOAD_FAILED` (or tracks fail unexpectedly), yt-dlp is probably out of date. The error message says so and includes the fix; you can run `youtube-music-dl upgrade` to update yt-dlp in place (prints before/after versions as JSON), then retry. It automatically uses the right mechanism for how the tool was installed (pip, or `uv tool upgrade` for uv installs).
+**A stale yt-dlp is a common cause of *unexplained* extraction failures.** YouTube changes often, so a fatal `NO_INFO`/`DOWNLOAD_FAILED`, or a `transient`-kind track failure that keeps happening across re-runs, may mean yt-dlp has fallen behind. Run `youtube-music-dl upgrade` to update it in place (prints before/after versions as JSON; picks pip vs `uv tool upgrade` automatically), then retry. But check the failure's `error.kind` first (see the CLI contract below) — `gone` is definitely not yt-dlp's fault, and `blocked` is probably not yt-dlp's fault.
 
 ## CLI contract (how to consume output)
 
 - **stdout is exactly one JSON object.** All logs/progress go to **stderr**. Always parse stdout as JSON; ignore or forward stderr. Example: `youtube-music-dl <url> -a "Artist" 2>/dev/null`
 - **Exit codes:** `0` = every track downloaded or already present; `2` = some tracks failed (a result object is still emitted — inspect per-track `status`); `1` = fatal error (an error object with a stable `error.code`).
 - **Idempotent:** re-running skips tracks already present (matched by the `youtube_video_id` tag). Pass `--force` to re-download.
-- **On exit `2`, re-run the identical command.** YouTube throttles bursts of requests, so a track can fail once and succeed moments later; the tool retries in-process, but heavier rate limiting still gets through. Re-running only refetches what's missing. Don't diagnose a failure with `--probe` — a probe hits the same API and gets throttled too, so a failed probe can't tell a dead video from a rate-limited one. Read `tracks[].error` instead — it's `null` unless the track failed, and `{"message": …, "permanent": …}` when it did. `permanent: true` means private, deleted, or region-blocked, and no amount of re-running will help (`message` carries yt-dlp's explanation) — drop that track via `-p/--playlist-items` and move on. Only tracks with `permanent: false` are worth retrying.
+- **On exit `2`, read each failed track's `error`, then act on its `kind`.** `tracks[].error` is `null` unless the track failed, and `{"message": …, "kind": …}` when it did (`message` is yt-dlp's own words). Don't diagnose with `--probe` — a probe hits the same API and is refused the same way, so it can't tell these apart. Branch on `kind`:
+    - `"gone"` — private, deleted, or region-locked. Re-running never helps; drop the track with `-p/--playlist-items` and move on.
+    - `"blocked"` — YouTube is refusing this connection (a bot check or rate limit, common **over a VPN** or datacenter IP). Probably not a stale-yt-dlp problem and not fixed by an immediate retry. Tell the user to try a different network, or turn off any VPN, or wait a bit, then re-run. If none of the above works, updating yt-dlp *may* help.
+    - `"transient"` — anything else. Re-run the identical command; it refetches only what's missing (already-downloaded tracks are skipped by the `youtube_video_id` tag).
 
 Success object (run `youtube-music-dl --print-schema` for the authoritative JSON Schemas of the result, error, and probe outputs):
 
@@ -35,7 +38,7 @@ Success object (run `youtube-music-dl --print-schema` for the authoritative JSON
   "tracks": [
     {"index": 1, "status": "downloaded|skipped|failed",
      "title": "…", "youtube_video_id": "…", "url": "…", "file": "/abs/path.opus",
-     "error": null}
+     "error": null}   // when failed: {"message": "…", "kind": "gone|blocked|transient"}
   ]
 }
 ```
