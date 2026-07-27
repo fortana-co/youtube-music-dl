@@ -126,7 +126,7 @@ def ytdlp_upgrade_command() -> str:
 
 def outdated_ytdlp_hint() -> str:
     """A hint appended to extraction failures: the usual cause is an out-of-date yt-dlp."""
-    return f"If this keeps happening, yt-dlp is probably out of date (YouTube changes frequently). Run `youtube-music-dl upgrade`, or: {ytdlp_upgrade_command()}"  # noqa: E501
+    return f"If this keeps happening, yt-dlp is probably out of date (YouTube changes frequently). Run `youtube-music-dl upgrade`, or: {ytdlp_upgrade_command()}"
 
 
 class UserError(Exception):
@@ -339,7 +339,7 @@ def with_retries(fn: Callable[[], Outcome[T]], description: str) -> Outcome[T]:
 
 def blocked_hint() -> str:
     """Guidance for a "blocked" failure: it's the network/IP, not the tool. Upgrade is mentioned last, a long shot."""
-    return f"YouTube is refusing this connection (a bot check or rate limit -- common over a VPN or datacenter IP, or after too many requests). Try again on a different network or with any VPN turned off; if it persists, updating yt-dlp may help: {ytdlp_upgrade_command()}"  # noqa: E501
+    return f"YouTube is refusing this connection (a bot check or rate limit -- common over a VPN or datacenter IP, or after too many requests). Try again on a different network or with any VPN turned off; if it persists, updating yt-dlp may help: {ytdlp_upgrade_command()}"
 
 
 def extraction_failed_message(prefix: str, error: str) -> str:
@@ -432,7 +432,7 @@ def detect_mode(top: Info, has_chapters_file: bool) -> str:
 
 def probe_hint(mode: str, has_chapters_file: bool) -> str:
     if mode == "single_songs":
-        return "Single video with no chapters. If this is a full album, its tracks may be listed in the description (with timestamps or durations); build a --chapters-file from it and re-run, or the whole video is downloaded as one track. If it really is one song, pass --album."  # noqa: E501
+        return "Single video with no chapters. If this is a full album, its tracks may be listed in the description (with timestamps or durations); build a --chapters-file from it and re-run, or the whole video is downloaded as one track. If it really is one song, pass --album."
     if mode == "chapters":
         return (
             "Will split this single video with the provided --chapters-file."

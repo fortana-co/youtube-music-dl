@@ -466,7 +466,7 @@ def test_extraction_failed_message_matches_the_hint_to_the_cause():
 
 def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, "-m", "youtube_music_dl.command_line", *args], capture_output=True, text=True
+        [sys.executable, "-m", "youtube_music_dl.command_line", *args], capture_output=True, text=True, check=False
     )
 
 

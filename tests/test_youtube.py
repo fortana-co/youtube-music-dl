@@ -28,6 +28,7 @@ def run_cli(*args: str, cwd: Path) -> tuple[int, dict]:
         cwd=str(cwd),
         capture_output=True,
         text=True,
+        check=False,
     )
     return proc.returncode, json.loads(proc.stdout)
 

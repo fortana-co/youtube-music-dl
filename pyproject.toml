@@ -56,8 +56,16 @@ line-length = 120
 target-version = "py312"
 
 [tool.ruff.lint]
-# pycodestyle errors (E), pyflakes (F), isort import sorting (I)
-select = ["E", "F", "I"]
+extend-select = ["F", "W", "B", "ERA", "I"]
+ignore = [
+    # PEP 695 type parameters are 3.12-only *syntax*, so adopting them would turn the sub-3.12 guard in
+    # command_line.py into a SyntaxError raised before the guard can print its message.
+    "UP046",
+    "UP047",
+    # every blind `except Exception` here wraps a best-effort read or a per-track step that must not sink the
+    # whole run, and each one already reports what it swallowed.
+    "BLE001",
+]
 
 [tool.pytest.ini_options]
 markers = [

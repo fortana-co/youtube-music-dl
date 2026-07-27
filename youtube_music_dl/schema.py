@@ -47,7 +47,7 @@ TRACK_ERROR_SCHEMA: dict[str, Any] = {
         },
         "kind": {
             "enum": list(ERROR_KINDS),
-            "description": "what would fix the failure. 'gone': the video is private, removed, or region-locked -- re-running never helps, so drop the track. 'blocked': YouTube is refusing this client (a bot check or rate limit) -- re-run from a different network or with any VPN off, or wait. 'transient': anything else -- re-run the same command; already-downloaded tracks are skipped.",  # noqa: E501
+            "description": "what would fix the failure. 'gone': the video is private, removed, or region-locked -- re-running never helps, so drop the track. 'blocked': YouTube is refusing this client (a bot check or rate limit) -- re-run from a different network or with any VPN off, or wait. 'transient': anything else -- re-run the same command; already-downloaded tracks are skipped.",
         },
     },
 }

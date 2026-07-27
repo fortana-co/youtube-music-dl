@@ -52,7 +52,7 @@ from .schema import (
     validate_upgrade,
 )
 
-if sys.version_info < (3, 12):
+if sys.version_info < (3, 12):  # noqa: UP036
     sys.exit("you need at least python3.12 to run youtube-music-dl")
 
 
@@ -136,7 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--audio-format",
         choices=AUDIO_FORMATS,
         default="",  # empty so $YMD_AUDIO_FORMAT can supply the default; resolved in resolve_audio_format
-        help=f"audio format (default {DEFAULT_AUDIO_FORMAT!r}, or ${AUDIO_FORMAT_ENV}); opus/m4a copy the native stream when possible, mp3 always transcodes",  # noqa: E501
+        help=f"audio format (default {DEFAULT_AUDIO_FORMAT!r}, or ${AUDIO_FORMAT_ENV}); opus/m4a copy the native stream when possible, mp3 always transcodes",
     )
     parser.add_argument(
         "-q",
@@ -198,17 +198,17 @@ def ytdlp_version() -> str | None:
 def main_upgrade(argv: list[str]) -> None:
     argparse.ArgumentParser(
         prog="youtube-music-dl upgrade",
-        description="Upgrade yt-dlp in the current environment. YouTube changes often, so keeping yt-dlp fresh fixes most 'it suddenly stopped working' breakages.",  # noqa: E501
+        description="Upgrade yt-dlp in the current environment. YouTube changes often, so keeping yt-dlp fresh fixes most 'it suddenly stopped working' breakages.",
     ).parse_args(argv)  # no options, but honor -h and reject stray args
 
     before = ytdlp_version()
     cmd = ytdlp_upgrade_argv()  # picks pip or `uv tool upgrade` based on how the tool was installed
     log(f"running: {' '.join(cmd)}")
-    completed = subprocess.run(cmd, stdout=sys.stderr.fileno(), stderr=sys.stderr.fileno())
+    completed = subprocess.run(cmd, stdout=sys.stderr.fileno(), stderr=sys.stderr.fileno(), check=False)
     if completed.returncode != 0:
         fail(
             "UPGRADE_FAILED",
-            f"couldn't upgrade yt-dlp (ran: {' '.join(cmd)}). Check your network and permissions, or upgrade yt-dlp manually: `pip install -U {YT_DLP_SPEC}`, or `uv tool upgrade youtube-music-dl` for a uv install.",  # noqa: E501
+            f"couldn't upgrade yt-dlp (ran: {' '.join(cmd)}). Check your network and permissions, or upgrade yt-dlp manually: `pip install -U {YT_DLP_SPEC}`, or `uv tool upgrade youtube-music-dl` for a uv install.",
         )
     after = ytdlp_version()
     if before and before == after:
