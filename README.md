@@ -45,7 +45,7 @@ YouTube frequently changes its player internals to thwart downloaders, so `yt-dl
 youtube-music-dl upgrade
 ```
 
-This upgrades `yt-dlp` in the same environment `youtube-music-dl` runs in. Under the hood it runs `pip install -U "yt-dlp[default]"`, or, if you installed via `uv tool`, it runs `uv tool upgrade youtube-music-dl` instead. When a download fails for a reason that looks like a stale `yt-dlp`, the error message says as much and includes the fix.
+This upgrades `yt-dlp` in the same environment `youtube-music-dl` runs in. Under the hood it runs `pip install -U "yt-dlp[default]"`, or, if you installed via `uv tool`, it runs `uv tool upgrade youtube-music-dl` instead.
 
 ## What it does that plain yt-dlp doesn't
 
@@ -95,7 +95,7 @@ The source video is not lost: it's stored in a `youtube_video_id` tag on each fi
 There are three formats, and **the file extension you get is always the format you asked for**. Note that you can set your own default with `YMD_AUDIO_FORMAT`. Pick by where you'll listen:
 
 - **`opus`** (default): the best quality-per-byte, and it (along with AAC) is what YouTube stores natively, so it's copied without re-encoding on essentially every video. Plays everywhere except Apple Music and other apps in the Apple ecosystem (but works with VLC, mpv, IINA, Jellyfin, etc).
-- **`m4a`**: native AAC in an MP4 container. Choose this e.g. if you live in **Apple Music**, which doesn't play Opus. Copied without re-encoding when an AAC stream is available (it almost always is).
+- **`m4a`**: native AAC in an MP4 container. Choose this e.g. if you use **Apple Music**, which doesn't play Opus. Copied without re-encoding when an AAC stream is available (it almost always is).
 - **`mp3`**: maximum device compatibility (old car stereos, cheap players). Always transcoded, since YouTube never serves mp3.
 
 ### Fixing a wrong artist/album with `retag`
@@ -107,7 +107,7 @@ youtube-music-dl retag "<album directory>" -a "Charly García"
 # or --album "New Name", or both
 ```
 
-`retag` points at an existing `<artist>/<album>` directory, rewrites the `artist`/`album` tags on its `.opus`/`.m4a`/`.mp3` files, and moves the `<artist>/<album>` folder to match, leaving titles, track numbers, etc untouched. It refuses with `INVALID_ARGS` if the directory has no audio files, or if the destination already exists (you probably already have the corrected album there). Anything more involved than this is a job for a real library manager like [beets](https://beets.io/).
+`retag` points at an existing `<artist>/<album>` directory, rewrites the `artist`/`album` tags on its audio files, and moves the `<artist>/<album>` folder, leaving titles, track numbers, etc untouched. It refuses with `INVALID_ARGS` if the directory has no audio files, or if the destination already exists (you probably already have the corrected album there). Anything more involved than this is a job for a real library manager like [beets](https://beets.io/).
 
 ### Env vars
 
@@ -116,11 +116,11 @@ youtube-music-dl retag "<album directory>" -a "Charly García"
 - `YMD_AUDIO_FORMAT`: default audio format (`opus`/`m4a`/`mp3`), used when `-f`/`--audio-format` isn't passed
   - E.g. an Apple-ecosystem user might set `export YMD_AUDIO_FORMAT="m4a"`
 - `YMD_AUDIO_QUALITY`: default audio quality, used when `-q`/`--audio-quality` isn't passed
-  - Only appropriate to set this if you're (1) downloading to mp3 and (2) want to change default quality (which is 160K)
+  - Only appropriate to set this if you're (1) downloading to mp3 and (2) want to change the default quality (which is 160K)
 
 ## Use with AI agents
 
-Because the CLI is non-interactive and emits stable JSON, an agent can drive it easily. E.g. "download this album by this artist to `~/Music`", a YouTube URL, or a CSV of albums to fetch one by one. This repo ships a [skill](skills/youtube-music-dl/SKILL.md) that teaches an agent the workflows, the output schema, and the error codes. To use this skill with an agent, copy or symlink it into your agent's skills directory.
+Because the CLI is non-interactive and emits stable JSON, an agent can drive it easily. E.g. "download this album by this artist to `~/Music` from this URL". This repo ships a [skill](skills/youtube-music-dl/SKILL.md) that teaches an agent the workflows, the output schema, and the error codes. To use this skill with an agent, copy or symlink it into your agent's skills directory.
 
 The CLI is self-describing, so an agent needs no filesystem paths: `--print-skill` prints the skill, `--print-schema` prints the JSON Schemas, and `--probe <url>` reports the detected mode (playlist, chaptered video, or single song) and the video description **without downloading**, which is e.g. how an agent decides whether a "full album" video needs a generated `--chapters-file`.
 
